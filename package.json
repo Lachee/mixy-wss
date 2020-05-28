@@ -4,7 +4,6 @@
   "description": "Mixy Websocket Server",
   "main": "src/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
@@ -20,6 +19,7 @@
     "@mixer/interactive-node": "^3.0.1",
     "@mixer/shortcode-oauth": "^1.2.0",
     "carina": "^0.11.2",
+    "nconf": "^0.10.0",
     "node-cache": "^5.1.0",
     "node-fetch": "^2.6.0",
     "redis": "^3.0.2",

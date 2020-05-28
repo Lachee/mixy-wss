@@ -9,7 +9,7 @@ Carina  = require('carina').Carina;
 Carina.WebSocket = WebSocket;
 interactive.setWebSocket(WebSocket);
 
-export default class Consumer extends EventEmitter {
+module.exports = class Client extends EventEmitter {
     constructor(app, uuid, ws) {
         super();
         this.app = app;
@@ -25,24 +25,19 @@ export default class Consumer extends EventEmitter {
 
         this.gameClientId = '8f1f2333d089d0098efb4c1b2599b54e1a696ffc5850f121';
         this.gameVersionId = 461588;
-        this.carnia = new Carina({
-            isBot: true,
-            queryString: { 'Client-ID': this.gameClientId }
-        }).open();
     }
 
     /** Called when a connection is first made */
     start() {
         const self = this;
         this.ws.on('message', message => {
-            console.log(self.uuid, message);
             let blob = JSON.parse(message);
             switch(blob.e) {
 
                 //Auth system message
                 case "HANDSHAKE":
                     //Authenticate the token
-                    console.log("Handshake for", self.uuid);
+                    self.log("Handshake");
                     self.app.validateAuthenticationAsync(blob.d.token).then((authentication) => {
 
                         //Store the authenticated shit
@@ -58,16 +53,19 @@ export default class Consumer extends EventEmitter {
                             }
 
                             //Now lets just say hello
-                            if (self.validate())
+                            if (self.validate()) {
+                                self.gameClientId   = blob.d.gameClientId || self.gameClientId;
+                                self.gameVersionId  = blob.d.gameVersionId || self.gameVersionId;
                                 self.initialize(blob.d.components || []);
+                            }
                         });
                     });
                     break;
 
-                //Anything else
+                //Anything else we will emit back so the components can subscribe to it
                 default:
-                    console.warn("Unkown Event", blob.e);
-                    self.validate();
+                    if (!self.validate()) return;
+                    this.emit(e, blob.d);
                     break;
             }
         });
@@ -85,21 +83,32 @@ export default class Consumer extends EventEmitter {
         self.send("INIT", { a: this.authentication, at: this.accessToken });
 
         //Get the identify ready for the user
-        this.mixerResource('GET', '/users/current').then(user => {
-            const needs_sub = this.user == null;
-            this.user = user;
-            this.send('IDENTIFY', this.user);
-            if (needs_sub) this.subscribe();
+        this.mixer('GET', '/users/current').then(user => {
+            this.setUser(user);
         });
 
         //Get all the components
         for(let i in components) {
             let name = components[i];
-            if (Component.allowedComponents[name]) {
-                let Class = require(Component.allowedComponents[name]);
+            if (Component.available[name]) {
+                this.log("component: ", name);
+                let Class = require(Component.available[name]);
+                this.components.push(new Class(this));
+            } else {
+                console.error(this.uuid, "component missing: ", name);
             }
         }
 
+        //There is no components available, so abort
+        if (this.components.length == 0) {
+            this.close("No components assigned");
+            return;
+        }
+        
+        //Tell all the components to init
+        this.components.forEach(c => c.initialize());
+
+        /*
         //Create the mixer client
         console.log("Creating a new game client");
         this.mixer = new interactive.GameClient();
@@ -117,6 +126,15 @@ export default class Consumer extends EventEmitter {
             console.error("Mixer open failure", self.uuid, e);
             self.close('Mixer open failed');
         });
+        */
+    }
+
+    /** Sets the Mixer User Object */
+    setUser(user) {
+        this.user = user;
+        this.user = user;
+        this.emit('identify', this.user);
+        this.send('IDENTIFY', this.user);
     }
 
     /** Finds the access token */
@@ -129,7 +147,9 @@ export default class Consumer extends EventEmitter {
             if (success) this.accessToken = await this.app.oauthStorage.getAccessToken(this.authentication.sub);
         }
 
-        return this.accessToken !== false && this.accessToken !== null;
+        let result = this.accessToken !== false && this.accessToken !== null;
+        this.emit("login", result);
+        return result;
     }
 
     /** Enforces validation check */
@@ -151,6 +171,8 @@ export default class Consumer extends EventEmitter {
 
     /** Closes down the consumer */
     close(reason) {
+        this.log("closed", reason);
+
         if (this.ws) {
             this.ws.send(reason);
             this.ws.close();
@@ -160,11 +182,13 @@ export default class Consumer extends EventEmitter {
         if (this.controller) {
             this.controller.onClose(reason);
         }
-
-        this.unsubscribe();
-
-        //Execute the event
+        
+        //Emit the close
         this.emit("close");
+        
+        //Tell all the components to init
+        if (this.components)
+            this.components.forEach(c => c.deinitialize());
     }
 
     /** Sends an event to the client */
@@ -176,70 +200,11 @@ export default class Consumer extends EventEmitter {
         };
         this.ws.send(JSON.stringify(obj));
         this.emit(event, obj);
-        console.log("SENT", obj);
-    }
-
-    
-    /** Subscribes to Constellation */
-    subscribe() {
-        console.log('consumer subscribed', this.uuid);
-        this.carnia.subscribe(`channel:${this.user.channel.id}:update`, data => { 
-            //Tell them we updated our channel
-            this.send('CHANNEL_UPDATE', data);
-
-            const previousCostreamId = this.user.channel.costreamId;
-
-            //Update our internal channel and resend the idenfity
-            this.user.channel = Object.assign(this.user.channel, data);
-            this.send('IDENTIFY', this.user);
-
-            //Have we changed? If so, we need to unsub from previous
-            if (previousCostreamId != null && previousCostreamId != this.user.channel.costreamId) {
-                console.log('consumer left costream', this.uuid, previousCostreamId);
-                this.carnia.unsubscribe(`costream:${previousCostreamId}:update`, this._carniaCostreamUpdate);
-                this.send('COSTREAM_LEAVE', { id: previousCostreamId });
-            }
-
-            //We have a costream, so we need to join one
-            if (this.user.channel.costreamId != null) {
-                console.log('consumer joined costream', this.uuid, this.user.channel.costreamId);
-                this.carnia.subscribe(`costream:${this.user.channel.costreamId}:update`, this._carniaCostreamUpdate);
-                this.send('COSTREAM_JOIN');
-            }
-        });
-        
-        this.carnia.subscribe(`channel:${this.user.channel.id}:followed`,           data => this.send('CHANNEL_FOLLOWED', data));
-        this.carnia.subscribe(`channel:${this.user.channel.id}:hosted`,             data => this.send('CHANNEL_HOSTED', data));
-        this.carnia.subscribe(`channel:${this.user.channel.id}:subscribed`,         data => this.send('CHANNEL_SUBSCRIBED', data));
-        this.carnia.subscribe(`channel:${this.user.channel.id}:skill`,              data => this.send('CHANNEL_SKILL', data));
-        this.carnia.subscribe(`channel:${this.user.channel.id}:patronageUpdate`,    data => this.send('CHANNEL_PATRONAGE_UPDATE', data));
-        this.carnia.subscribe(`channel:${this.user.channel.id}:subscriptionGifted`, data => this.send('CHANNEL_SUBSCRIPTION_GIFTED', data));
-        this.send('CARNIA_SUBSCRIBED');
-        //this.carnia.subscribe(`costream:${this.user.channel.id}:update`, data => this.send('CARNIA_COSTREAM_UPDATE', data));
-    }
-
-    /** Costream Update. Seperate function because Co-Streams are cross user, so I cannot unsub all. */
-    _carniaCostreamUpdate(data) { this.send('CARNIA_COSTREAM_UPDATE', data); }
-
-    /** Unsubscribes from Constellation */
-    unsubscribe() {
-        console.log('consumer unsubscribed', this.uuid);
-        this.carnia.unsubscribe(`channel:${this.user.channel.id}:update`);
-        this.carnia.unsubscribe(`channel:${this.user.channel.id}:followed`);
-        this.carnia.unsubscribe(`channel:${this.user.channel.id}:hosted`);
-        this.carnia.unsubscribe(`channel:${this.user.channel.id}:subscribed`);
-        this.carnia.unsubscribe(`channel:${this.user.channel.id}:skill`);
-        this.carnia.unsubscribe(`channel:${this.user.channel.id}:patronageUpdate`);
-        this.carnia.unsubscribe(`channel:${this.user.channel.id}:subscriptionGifted`);
-
-        if (this.user.channel.costreamId != null) 
-            this.carnia.unsubscribe(`costream:${this.user.channel.costreamId}:update`, this._carniaCostreamUpdate);
-
-        this.send('CARNIA_UNSUBSCRIBED');
+        this.log('send ', obj);
     }
 
     /** fetches a mixer endpoint */
-    async mixerResource(verb, endpoint, payload = null) {
+    async mixer(verb, endpoint, payload = null) {
         let response = await fetch(`https://mixer.com/api/v1${endpoint}`, {
             method: verb,
             body: payload ? JSON.stringify(payload) : null,
@@ -250,5 +215,10 @@ export default class Consumer extends EventEmitter {
         });
 
         return await response.json();
+    }
+
+    /** Logs a message as this client */
+    log (message, ...params) {
+        console.log(this.uuid, message, ...params);
     }
 }
