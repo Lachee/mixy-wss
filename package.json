@@ -1,0 +1,28 @@
+{
+  "name": "mixy-wss",
+  "version": "1.0.0",
+  "description": "Mixy Websocket Server",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lachee/mixy-wss.git"
+  },
+  "author": "Lachee",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Lachee/mixy-wss/issues"
+  },
+  "homepage": "https://github.com/Lachee/mixy-wss#readme",
+  "dependencies": {
+    "@mixer/interactive-node": "^3.0.1",
+    "@mixer/shortcode-oauth": "^1.2.0",
+    "carina": "^0.11.2",
+    "node-cache": "^5.1.0",
+    "node-fetch": "^2.6.0",
+    "redis": "^3.0.2",
+    "uuid": "^8.1.0"
+  }
+}
